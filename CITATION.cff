@@ -1,0 +1,31 @@
+cff-version: 1.2.0
+message: "If you use this harness or its results, please cite it as below."
+type: software
+title: "ple-sitecheck: a verifier-in-the-loop agent harness for engineering deliverables"
+abstract: >-
+  An agent harness for the Physical-Engineering's Last Exam (PLE) benchmark.
+  It wraps a plain OpenAI-compatible tool-calling loop with token-free layers
+  that inventory the task's documents, parse a deliverable checklist from the
+  brief, open every deliverable after the model says it is done, and feed the
+  findings back as bounded repair rounds.
+authors:
+  - name: "BKI Labs"
+license: Apache-2.0
+repository-code: "https://github.com/bki-labs/ple-sitecheck"
+url: "https://github.com/bki-labs/ple-sitecheck"
+version: 0.1.0
+date-released: 2026-11-12
+keywords:
+  - LLM agents
+  - agent harness
+  - engineering deliverables
+  - verification
+  - Physical-Engineering's Last Exam
+  - benchmark
+references:
+  - type: software
+    title: "PLE: Physical-Engineering's Last Exam (competition kit)"
+    authors:
+      - name: "Google Research"
+    repository-code: "https://github.com/google-research/ple"
+    license: Apache-2.0

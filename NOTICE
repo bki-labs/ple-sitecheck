@@ -1,0 +1,13 @@
+ple-sitecheck
+Copyright 2026 ple-sitecheck authors
+
+This product includes software developed at Google LLC as part of
+https://github.com/google-research/ple (Apache License 2.0):
+
+- taskbridge.py: copied unchanged from sample_submissions/taskbridge.py
+- engine.py: adapted from sample_submissions/custom-openai/serve.py
+  (model loop, streaming, retries, compaction, MCP tools); modifications are
+  listed in the module docstring.
+
+All other files are original work licensed under the Apache License 2.0
+(see LICENSE).

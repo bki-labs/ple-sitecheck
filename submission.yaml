@@ -1,0 +1,27 @@
+# ple-sitecheck: engineering-task harness (triage, checklist, verify, review).
+# Swap the model here only; the code reads MODEL_NAME/MODEL_BASE_URL from the evaluator.
+#   submission:  google-cloud/gemini-3.8-flash  (primary, cheap)
+#                google-cloud/gemini-4-argon    (upgrade path)
+#                google-cloud/gemma-4-26b       (second model; set COMPACT_AT_TOKENS: "90000")
+#   small-model A/B switches (all off unless set; DESIGN.md section 11): NOTES_PHASE: "1", READ_SWEEP_TURNS: "6",
+#   VERIFY_TEMPLATE: "1", READ_REPEAT_CHARS: "4000", COMPACT_KEEP_OPENING: "1", TEMPERATURE: "0.3"
+#   variant C switches (off unless set; DESIGN.md section 12): PROVENANCE_CHECK: "1", FINISH_GATE: "1", IO_HELPERS: "1"
+#   (+ FINISH_GATE_PASSES, FINISH_GATE_TURN_FRACTION, FINISH_GATE_MINUTES, ERROR_STREAK, HELPER_PATH)
+#   local dev:   gemini/gemini-3.8-flash, gemini/gemma-4-26b-a4b-it (AI Studio key, not submittable)
+name: ple-sitecheck
+model_api: google-cloud/gemini-3.8-flash
+install: >-
+  uv venv --python 3.12 /opt/harness/venv
+  && uv pip install --python /opt/harness/venv/bin/python -r {src}/requirements.txt
+serve: /opt/harness/venv/bin/python {src}/serve.py
+env:
+  REASONING_EFFORT: "high"
+  MAX_OUTPUT_TOKENS: "32000"
+  COMPACT_AT_TOKENS: "200000"
+  MAX_TURNS: "160"
+  TOOL_RESULT_CHARS: "24000"
+  CHECKLIST_LLM: "1"
+  ENG_REVIEW: "1"
+  MAX_REPAIRS: "2"
+  TRIAGE: "1"
+  FIRST_DRAFT_TURN: "35"

@@ -1,0 +1,11 @@
+.venv/
+wvenv/
+__pycache__/
+*.pyc
+runs/
+*.env
+.env
+local.env
+tests/_work/
+*.log
+.DS_Store

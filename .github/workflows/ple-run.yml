@@ -1,0 +1,200 @@
+# Dev runs of the harness on x86 GitHub runners (Docker available). Manual trigger only.
+# Model: self-hosted Gemma (llama-server on Colab behind a cloudflared tunnel, OpenAI-compatible); the judge is the
+# same server (no JUDGE_* set). Secrets: MODEL_API_KEY (tunnel gate key), HF_TOKEN (gated PLE dataset).
+# Task data is downloaded per run and never committed; only results.json and the eval-generated artifacts/ are kept
+# as a private run artifact. A and B variants run as two parallel jobs against the same server (-np 2).
+name: ple-run
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "OpenAI-compatible base URL of the model server (…/v1)"
+        required: true
+      tasks:
+        description: "comma-separated dev task ids (empty = all)"
+        default: "wind-diaphragm-shear,roof-deck-design,lv-cable-sizing,data-center-site-model,data-hall-mep-routing,fill-compaction-acceptance,fire-test-validation-memo,data-hall-mep-routing-offset"
+      trials:
+        description: "trials per task"
+        default: "2"
+      model_name:
+        description: "served model alias"
+        default: "gemma-4-26b"
+      common_env:
+        description: "KEY=VALUE pairs applied to both variants"
+        default: "COMPACT_AT_TOKENS=90000 MAX_OUTPUT_TOKENS=16000"
+      b_env:
+        description: "KEY=VALUE pairs for variant B only"
+        default: "NOTES_PHASE=1 VERIFY_TEMPLATE=1 READ_REPEAT_CHARS=4000 COMPACT_KEEP_OPENING=1 TEMPERATURE=0.3 TOOL_RESULT_CHARS=12000"
+      c_env:
+        description: "KEY=VALUE pairs for variant C only"
+        default: "PROVENANCE_CHECK=1 FINISH_GATE=1 IO_HELPERS=1"
+      d_env:
+        description: "KEY=VALUE pairs for variant D only (variant C's switches plus the D ones)"
+        default: "PROVENANCE_CHECK=1 FINISH_GATE=1 IO_HELPERS=1 IO_WRITERS=1 DXF_LAYER_CHECK=1 VALUE_CHECK=1 READBACK=1"
+      variants:
+        description: "which variants to run: A, B, C, D or a comma list (A,C,D)"
+        default: "A,B"
+      run_name:
+        description: "prefix of the run folder"
+        default: "gha"
+
+env:
+  KIT_REPO: google-research/ple
+  KIT_SHA: 8320f0402fdca9f42476607f72bcfd5271cd50c9
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      - id: m
+        env:
+          TASKS: ${{ inputs.tasks }}
+          WANT: ${{ inputs.variants }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          tasks = [t.strip() for t in os.environ["TASKS"].split(",") if t.strip()]
+          vs = [v.strip() for v in os.environ["WANT"].split(",") if v.strip()]
+          print("matrix=" + json.dumps({"include": [{"task": t, "variant": v} for t in tasks for v in vs]}))
+          PY
+
+  run:
+    needs: plan
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    name: ${{ matrix.variant }} ${{ matrix.task }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - name: Gate
+        id: gate
+        run: echo "go=1" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.go == '1'
+        with:
+          path: harness
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.go == '1'
+        with:
+          repository: ${{ env.KIT_REPO }}
+          ref: ${{ env.KIT_SHA }}
+          path: kit-src
+      - name: Free disk for task images
+        if: steps.gate.outputs.go == '1'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache /usr/local/share/boost \
+            /usr/share/swift /usr/local/.ghcup /usr/local/share/powershell /usr/local/share/chromium /usr/local/lib/node_modules || true
+          sudo docker image prune -af -q > /dev/null || true
+          # Docker data on the second disk (/mnt) when it exists
+          if mountpoint -q /mnt; then
+            sudo systemctl stop docker docker.socket
+            sudo mkdir -p /mnt/docker
+            echo '{"data-root": "/mnt/docker"}' | sudo tee /etc/docker/daemon.json
+            sudo systemctl start docker
+          fi
+          sudo docker info --format '{{.DockerRootDir}}'
+          df -h / /mnt
+      - uses: astral-sh/setup-uv@v5
+        if: steps.gate.outputs.go == '1'
+      - name: Configure submission.yaml
+        if: steps.gate.outputs.go == '1'
+        env:
+          MODEL: ${{ inputs.model_name }}
+          COMMON: ${{ inputs.common_env }}
+          BENV: ${{ inputs.b_env }}
+          CENV: ${{ inputs.c_env }}
+          DENV: ${{ inputs.d_env }}
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          cd harness
+          sed -i "s#^model_api: .*#model_api: openai-compatible/${MODEL}\nmodel_base_url: https://llm.example.org/v1#" submission.yaml
+          python3 - <<'PY'
+          import os, re
+          p = "submission.yaml"; s = open(p).read()
+          pairs = os.environ.get("COMMON", "").split()
+          if os.environ["VARIANT"] == "B":
+              pairs += os.environ.get("BENV", "").split()
+          if os.environ["VARIANT"] == "C":
+              pairs += os.environ.get("CENV", "").split()
+          if os.environ["VARIANT"] == "D":
+              pairs += os.environ.get("DENV", "").split()
+          for kv in pairs:
+              k, v = kv.split("=", 1)
+              line = f'  {k}: "{v}"'
+              if re.search(rf"(?m)^  {re.escape(k)}: .*$", s):
+                  s = re.sub(rf"(?m)^  {re.escape(k)}: .*$", line, s)
+              else:
+                  s = re.sub(r"(?m)^env:\s*$", "env:\n" + line, s, count=1)
+          open(p, "w").write(s)
+          PY
+          grep -E '^(model_api|model_base_url):' submission.yaml
+          sed -n '/^env:/,$p' submission.yaml
+      - name: Check model server
+        if: steps.gate.outputs.go == '1'
+        env:
+          BASE: ${{ inputs.base_url }}
+          MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+        run: |
+          curl -fsS -m 30 -H "Authorization: Bearer $MODEL_API_KEY" "$BASE/models" | head -c 300; echo
+      - name: Env file (secrets, never printed)
+        if: steps.gate.outputs.go == '1'
+        env:
+          MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          umask 077
+          printf 'MODEL_API_KEY=%s\nHF_TOKEN=%s\n' "$MODEL_API_KEY" "$HF_TOKEN" > "$RUNNER_TEMP/local.env"
+      - name: Clamp task CPUs to this runner (private-repo runners have 2 vCPU; dev runs only)
+        if: steps.gate.outputs.go == '1'
+        run: |
+          cd kit-src
+          python3 - <<'PY'
+          p = "eval/run.py"; s = open(p).read()
+          old = '    fresh_copy(src, target)\n    toml = target / "task.toml"\n'
+          new = old + ('    import os as _os, re as _re\n'
+                       '    toml.write_text(_re.sub(r"(?m)^(\\s*cpus\\s*=\\s*)(\\d+)", lambda m: m.group(1) + str(min(int(m.group(2)), _os.cpu_count() or 2)), toml.read_text(encoding="utf-8")), encoding="utf-8")\n')
+          assert s.count(old) == 1, "kit changed: stage_tasks anchor not found"
+          open(p, "w").write(s.replace(old, new))
+          PY
+          nproc
+      - name: Install harbor
+        if: steps.gate.outputs.go == '1'
+        run: uv tool install -q harbor==0.20.0 --with websockets
+      - name: Run
+        if: steps.gate.outputs.go == '1'
+        env:
+          TASKS: ${{ matrix.task }}
+          TRIALS: ${{ inputs.trials }}
+          BASE: ${{ inputs.base_url }}
+          MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+          RUN: ${{ inputs.run_name }}-${{ matrix.variant }}
+        run: |
+          cd kit-src
+          set -o pipefail
+          # watchdog: if the model server stops answering for ~10 min, stop the run instead of waiting for timeouts
+          ( misses=0; while sleep 120; do
+              if curl -fsS -m 30 -o /dev/null -H "Authorization: Bearer $MODEL_API_KEY" "$BASE/models"; then misses=0; else misses=$((misses+1)); fi
+              if [ $misses -ge 5 ]; then echo "WATCHDOG: model server down ~10 min, stopping"; pkill -f eval/run.py; docker ps -q | xargs -r docker kill >/dev/null; break; fi
+            done ) &
+          uv run python eval/run.py ../harness --env-file "$RUNNER_TEMP/local.env" --model-base-url "$BASE" \
+            --no-export --trials "$TRIALS" ${TASKS:+--tasks "$TASKS"} --out "runs/$RUN" 2>&1 \
+            | sed -E 's/(hf_)[A-Za-z0-9_-]+/\1***/g' | grep -v 'Fetching .* files' | tee "$RUNNER_TEMP/run.log" || true
+          df -h /
+      - name: Keep results (private artifact; no task data)
+        if: always() && steps.gate.outputs.go == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ple-${{ inputs.run_name }}-${{ matrix.variant }}-${{ matrix.task }}
+          retention-days: 7
+          path: |
+            kit-src/runs/${{ inputs.run_name }}-${{ matrix.variant }}/
+            !kit-src/runs/${{ inputs.run_name }}-${{ matrix.variant }}/tasks/
+            !kit-src/runs/**/deliverables/files/**/input/**
+            ${{ runner.temp }}/run.log
+      - name: Remove env file
+        if: always()
+        run: rm -f "$RUNNER_TEMP/local.env"
